@@ -19,6 +19,7 @@ import time
 import random
 import os
 import shutil
+import uuid
 import tempfile
 import markdownify
 import sys
@@ -42,7 +43,14 @@ def get_chrome_path() -> str:
         paths = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
                  "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta"]
     else:  # Linux
-        paths = ["/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium", "/opt/chrome/chrome", "/usr/local/bin/chrome"]
+        paths = ["/usr/bin/google-chrome",
+                 "/opt/chrome/chrome",
+                 "/usr/bin/chromium-browser",
+                 "/usr/bin/chromium",
+                 "/usr/local/bin/chrome",
+                 "/opt/google/chrome/chrome-headless-shell",
+                 #"/app/chrome_bundle/chrome136/chrome-linux64"
+                ]
 
     for path in paths:
         if os.path.exists(path) and os.access(path, os.X_OK):
@@ -72,17 +80,36 @@ def install_chromedriver() -> str:
     """
     Install the ChromeDriver if not already installed. Return the path.
     """
+    # First try to use chromedriver in the project root directory (as per README)
+    project_root_chromedriver = "./chromedriver"
+    if os.path.exists(project_root_chromedriver) and os.access(project_root_chromedriver, os.X_OK):
+        print(f"Using ChromeDriver from project root: {project_root_chromedriver}")
+        return project_root_chromedriver
+    
+    # Then try to use the system-installed chromedriver
     chromedriver_path = shutil.which("chromedriver")
-    if not chromedriver_path:
-        try:
-            chromedriver_path = chromedriver_autoinstaller.install()
-        except Exception as e:
-            raise FileNotFoundError(
-                "ChromeDriver not found and could not be installed automatically. "
-                "Please install it manually from https://chromedriver.chromium.org/downloads."
-                "and ensure it's in your PATH or specify the path directly."
-                "See know issues in readme if your chrome version is above 115."
-            ) from e
+    if chromedriver_path:
+        return chromedriver_path
+    
+    # In Docker environment, try the fixed path
+    if os.path.exists('/.dockerenv'):
+        docker_chromedriver_path = "/usr/local/bin/chromedriver"
+        if os.path.exists(docker_chromedriver_path) and os.access(docker_chromedriver_path, os.X_OK):
+            print(f"Using Docker ChromeDriver at {docker_chromedriver_path}")
+            return docker_chromedriver_path
+    
+    # Fallback to auto-installer only if no other option works
+    try:
+        print("ChromeDriver not found, attempting to install automatically...")
+        chromedriver_path = chromedriver_autoinstaller.install()
+    except Exception as e:
+        raise FileNotFoundError(
+            "ChromeDriver not found and could not be installed automatically. "
+            "Please install it manually from https://chromedriver.chromium.org/downloads."
+            "and ensure it's in your PATH or specify the path directly."
+            "See know issues in readme if your chrome version is above 115."
+        ) from e
+    
     if not chromedriver_path:
         raise FileNotFoundError("ChromeDriver not found. Please install it or add it to your PATH.")
     return chromedriver_path
@@ -112,6 +139,11 @@ def create_undetected_chromedriver(service, chrome_options) -> webdriver.Chrome:
 
 def create_driver(headless=False, stealth_mode=True, crx_path="./crx/nopecha.crx", lang="en") -> webdriver.Chrome:
     """Create a Chrome WebDriver with specified options."""
+    # Warn if trying to run non-headless in Docker
+    if not headless and os.path.exists('/.dockerenv'):
+        print("[WARNING] Running non-headless browser in Docker may fail!")
+        print("[WARNING] Consider setting headless=True or headless_browser=True in config.ini")
+    
     chrome_options = Options()
     chrome_path = get_chrome_path()
     
@@ -120,17 +152,28 @@ def create_driver(headless=False, stealth_mode=True, crx_path="./crx/nopecha.crx
     chrome_options.binary_location = chrome_path
     
     if headless:
-        chrome_options.add_argument("--headless")
+        #chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--headless=new")
         chrome_options.add_argument("--disable-gpu")
         chrome_options.add_argument("--disable-webgl")
     user_data_dir = tempfile.mkdtemp()
     user_agent = get_random_user_agent()
     width, height = (1920, 1080)
-    chrome_options.add_argument(f"--user-data-dir={user_data_dir}")
-    chrome_options.add_argument(f"--accept-lang={lang}-{lang.upper()},{lang};q=0.9")
-    chrome_options.add_argument("--timezone=Europe/Paris")
+    user_data_dir = tempfile.mkdtemp(prefix="chrome_profile_")
     chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument('--disable-dev-shm-usage')
+    profile_dir = f"/tmp/chrome_profile_{uuid.uuid4().hex[:8]}"
+    chrome_options.add_argument(f'--user-data-dir={profile_dir}')
+    chrome_options.add_argument(f"--accept-lang={lang}-{lang.upper()},{lang};q=0.9")
+    chrome_options.add_argument("--disable-extensions")
+    chrome_options.add_argument("--disable-background-timer-throttling")
+    chrome_options.add_argument("--timezone=Europe/Paris")
+    chrome_options.add_argument('--remote-debugging-port=9222')
+    chrome_options.add_argument('--disable-background-timer-throttling')
+    chrome_options.add_argument('--disable-backgrounding-occluded-windows')
+    chrome_options.add_argument('--disable-renderer-backgrounding')
+    chrome_options.add_argument('--disable-features=TranslateUI')
+    chrome_options.add_argument('--disable-ipc-flooding-protection')
     chrome_options.add_argument("--mute-audio")
     chrome_options.add_argument("--disable-notifications")
     chrome_options.add_argument("--autoplay-policy=user-gesture-required")
@@ -698,8 +741,6 @@ if __name__ == "__main__":
     
     input("press enter to continue")
     print("AntiCaptcha / Form Test")
-    browser.go_to("https://www.google.com/recaptcha/api2/demo")
-    time.sleep(50)
     browser.go_to("https://bot.sannysoft.com")
     time.sleep(5)
     #txt = browser.get_text()
